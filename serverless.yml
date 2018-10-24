@@ -8,11 +8,14 @@ plugins:
 provider:
   name: aws
   runtime: nodejs8.10
+  region: ap-northeast-1
+  environment:
+    SLACK_WEBHOOK_URL: ${ssm:iftttOfficeSlackEndpoint}
 
 functions:
-  hello:
-    handler: handler.hello
+  departed:
+    handler: handler.onDeparted
     events:
       - http:
-          method: get
-          path: hello
+          method: post
+          path: departed
