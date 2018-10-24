@@ -1,4 +1,4 @@
-import { IncomingWebhook } from "@slack/client";
+import { IncomingWebhook, IncomingWebhookSendArguments } from "@slack/client";
 import { APIGatewayEvent, Callback, Context, Handler } from "aws-lambda";
 import * as moment from "moment-timezone";
 
@@ -9,22 +9,27 @@ export const onDeparted: Handler = async (
   context: Context,
   cb: Callback
 ) => {
-  const webhook = new IncomingWebhook(process.env.SLACK_WEBHOOK_URL);
+  const requestBody = parseRequestBody(event.body);
 
-  const result = await webhook
-    .send({
-      text: generateText(event.body),
-      username: "naoyoshi okamae(bot)"
-    })
-    .catch(cb);
-  if (!result) {
+  if (!checkActive(requestBody, cb)) {
     return;
+  }
+
+  const slackSendArg = {
+    text: generateText(requestBody.minutesToDestination),
+    username: "naoyoshi okamae(bot)"
+  };
+  if (!requestBody.dryRun) {
+    if (!(await sendToSlack(slackSendArg, cb))) {
+      return;
+    }
   }
 
   const response = {
     body: JSON.stringify({
       input: event,
-      message: "posted successfully"
+      message: "posted successfully",
+      slackSendArg
     }),
     statusCode: 200
   };
@@ -32,13 +37,50 @@ export const onDeparted: Handler = async (
   cb(null, response);
 };
 
-function generateText(body: string): string {
-  const minutesToDestination = JSON.parse(body).minutesToDestination as number;
+async function sendToSlack(
+  args: IncomingWebhookSendArguments,
+  cb: Callback
+): Promise<boolean> {
+  return !!(await new IncomingWebhook(process.env.SLACK_WEBHOOK_URL)
+    .send(args)
+    .catch(err =>
+      cb(null, JSON.stringify({ body: err.toString(), statusCode: 500 }))
+    ));
+}
+
+function checkActive(requestBody: IRequsetBody, cb: Callback): boolean {
+  const [from, to] = (requestBody.activeHours || "0-23")
+    .split("-")
+    .map(h => Number.parseInt(h, 10));
+  const currentHour = moment().hours();
+  if (
+    currentHour < from ||
+    currentHour > to ||
+    (requestBody.activeDays && !requestBody.activeDays.includes(moment().day()))
+  ) {
+    cb(null, JSON.stringify({ body: "inactive hour", statusCode: 200 }));
+    return false;
+  }
+  return true;
+}
+
+function generateText(minutesToDestination: number): string {
   const arrivesAt = moment().add(minutesToDestination, "m");
   const hourText =
-    arrivesAt.minutes() < 30
+    arrivesAt.minutes() < 15
       ? `${arrivesAt.hour()}時過ぎ`
       : `${arrivesAt.hour() + 1}時前`;
 
   return `${hourText}に着きます`;
+}
+
+function parseRequestBody(body: string): IRequsetBody {
+  return JSON.parse(body);
+}
+
+interface IRequsetBody {
+  activeHours?: string;
+  activeDays?: number[];
+  minutesToDestination: number;
+  dryRun?: boolean;
 }
